@@ -3,10 +3,13 @@ import os
 import subprocess
 import sys
 import logging
+import io
+import contextlib
+import traceback
 
 logging.basicConfig(level=logging.DEBUG)
 
-def application(environ, start_response):
+def app(environ, start_response):
     logging.info("Request received")
     auth_header = environ.get('HTTP_AUTHORIZATION')
     password = os.environ.get('PASSWORD')
@@ -27,22 +30,36 @@ def application(environ, start_response):
 
     output = ""
     error = ""
+    result_value = None
+
+    stdout_buffer = io.StringIO()
+    code_globals = {}
+    code_locals = {}
+
     try:
-        command = [sys.executable, '-c', code_to_run]
-        logging.info(f"Running command: {command}")
-        result = subprocess.run(
-            command,
-            capture_output=True,
-            text=True,
-            timeout=30
-        )
-        output = result.stdout
-        error = result.stderr
-        logging.info(f"Subprocess stdout: {output}")
-        logging.info(f"Subprocess stderr: {error}")
+        with contextlib.redirect_stdout(stdout_buffer):
+            exec(code_to_run, code_globals, code_locals)
+        
+        output = stdout_buffer.getvalue()
+        logging.info(f"Exec stdout: {output}")
+
+        lines = code_to_run.strip().split('\n')
+        if lines:
+            last_line = lines[-1]
+            try:
+                # Try to evaluate the last line as an expression
+                # This will raise a SyntaxError if it's a statement
+                compiled_code = compile(last_line, '<string>', 'eval')
+                result_value = eval(compiled_code, code_globals, code_locals)
+            except SyntaxError:
+                # Not an expression, so no result value
+                pass
+            except Exception as eval_e:
+                logging.warning(f"Exception during eval: {eval_e}")
+
     except Exception as e:
-        logging.error(f"Exception during subprocess execution: {e}")
-        error = str(e)
+        logging.error(f"Exception during exec: {e}")
+        error = traceback.format_exc()
 
     status = '200 OK'
     headers = [('Content-type', 'application/json')]
@@ -50,5 +67,5 @@ def application(environ, start_response):
     return [json.dumps({
         'output': output,
         'error': error,
-        'result': None
+        'result': result_value
     }).encode()]
