@@ -11,7 +11,16 @@ logging.basicConfig(level=logging.DEBUG)
 
 def app(environ, start_response):
     logging.info("Request received")
-    auth_header = environ.get('HTTP_AUTHORIZATION')
+    
+    # Parse the request manually since we are not using Flask/Werkzeug Request object
+    # This is a simplified parsing for demonstration
+    headers = {}
+    for key, value in environ.items():
+        if key.startswith('HTTP_'):
+            header_name = key[5:].replace('_', '-').title()
+            headers[header_name] = value
+
+    auth_header = headers.get('Authorization')
     password = os.environ.get('PASSWORD')
     if not password or auth_header != f"Bearer {password}":
         logging.warning("Unauthorized request")
@@ -29,8 +38,8 @@ def app(environ, start_response):
     logging.info(f"Code to run: {code_to_run}")
 
     output = ""
-    error = ""
     result_value = None
+    execution_error = None
 
     stdout_buffer = io.StringIO()
     code_globals = {}
@@ -47,25 +56,28 @@ def app(environ, start_response):
         if lines:
             last_line = lines[-1]
             try:
-                # Try to evaluate the last line as an expression
-                # This will raise a SyntaxError if it's a statement
                 compiled_code = compile(last_line, '<string>', 'eval')
                 result_value = eval(compiled_code, code_globals, code_locals)
             except SyntaxError:
-                # Not an expression, so no result value
                 pass
             except Exception as eval_e:
                 logging.warning(f"Exception during eval: {eval_e}")
 
     except Exception as e:
         logging.error(f"Exception during exec: {e}")
-        error = traceback.format_exc()
+        execution_error = traceback.format_exc()
 
     status = '200 OK'
     headers = [('Content-type', 'application/json')]
-    start_response(status, headers)
-    return [json.dumps({
+    
+    response_data = {
         'output': output,
-        'error': error,
         'result': result_value
-    }).encode()]
+    }
+
+    if execution_error:
+        response_data['error'] = execution_error
+        status = '400 Bad Request' # Or 500 Internal Server Error depending on the nature of the error
+
+    start_response(status, headers)
+    return [json.dumps(response_data).encode()]
